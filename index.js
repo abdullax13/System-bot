@@ -7,6 +7,7 @@ const { setupWelcome } = require("./src/features/welcome");
 const { setupLobby } = require("./src/features/lobby");
 const { setupTickets } = require("./src/features/tickets");
 const { setupSetupCommand } = require("./src/features/setup");
+const { setupMod } = require("./src/features/mod");
 
 const client = new Client({
   intents: [
@@ -26,6 +27,7 @@ setupWelcome(client, store);
 setupLobby(client, store);
 setupTickets(client, store);
 setupSetupCommand(client, store);
+setupMod(client);
 
 client.once("ready", async () => {
   console.log(`Logged in as ${client.user.tag}`);
