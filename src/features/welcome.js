@@ -1,5 +1,6 @@
 // src/features/welcome.js
-const { EmbedBuilder } = require("discord.js");
+const { AttachmentBuilder } = require("discord.js");
+const { createCanvas, loadImage } = require("@napi-rs/canvas");
 
 function setupWelcome(client) {
   client.on("guildMemberAdd", async (member) => {
@@ -7,22 +8,47 @@ function setupWelcome(client) {
       const channelId = process.env.WELCOME_CHANNEL_ID;
       if (!channelId) return;
 
-      const ch = await member.guild.channels.fetch(channelId).catch(() => null);
-      if (!ch) return;
+      const canvas = createCanvas(1024, 1024);
+const ctx = canvas.getContext("2d");
 
-      const inviterText = "Unknown"; // لاحقاً نركب invite tracking
+const background = await loadImage(process.env.WELCOME_BG_URL);
+ctx.drawImage(background, 0, 0, canvas.width, canvas.height);
 
-      const embed = new EmbedBuilder()
-        .setTitle(`Welcome to ${member.guild.name}`)
-        .setDescription(`Welcome : ${member}\nInvited By : ${inviterText}`)
-        .setThumbnail(member.user.displayAvatarURL({ size: 256 }))
-        .setColor(0x00b0f4)
-        .setTimestamp();
+const avatar = await loadImage(
+  member.user.displayAvatarURL({ extension: "png", size: 512 })
+);
 
-      const welcomeImageUrl = process.env.WELCOME_IMAGE_URL;
-      if (welcomeImageUrl) embed.setImage(welcomeImageUrl);
+// الإحداثيات الخاصة بصورتك
+const centerX = 512;
+const centerY = 600;
+const radius = 220;
 
-      await ch.send({ embeds: [embed] });
+ctx.save();
+ctx.beginPath();
+ctx.arc(centerX, centerY, radius, 0, Math.PI * 2, true);
+ctx.closePath();
+ctx.clip();
+
+ctx.drawImage(
+  avatar,
+  centerX - radius,
+  centerY - radius,
+  radius * 2,
+  radius * 2
+);
+
+ctx.restore();
+
+      const attachment = new AttachmentBuilder(
+        await canvas.encode("png"),
+        { name: "welcome.png" }
+      );
+
+      await ch.send({
+        content: `• Welcome : ${member}\n• Invited by : Unknown`,
+        files: [attachment],
+      });
+
     } catch (e) {
       console.error("Welcome error:", e);
     }
