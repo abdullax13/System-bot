@@ -1,31 +1,31 @@
 // src/features/welcome.js
-const { EmbedBuilder, AttachmentBuilder } = require("discord.js");
+const { EmbedBuilder } = require("discord.js");
 
-function setupWelcome(client, store) {
+function setupWelcome(client) {
   client.on("guildMemberAdd", async (member) => {
-    const channelId = process.env.WELCOME_CHANNEL_ID;
-    const ch = member.guild.channels.cache.get(channelId);
-    if (!ch) return;
+    try {
+      const channelId = process.env.WELCOME_CHANNEL_ID;
+      if (!channelId) return;
 
-    // inviter (نسخة مبسطة: لو ما تبي tracking الحين)
-    const inviterText = "Unknown";
+      const ch = await member.guild.channels.fetch(channelId).catch(() => null);
+      if (!ch) return;
 
-    // خيار 1: رابط صورة (CDN)
-    const file = new AttachmentBuilder("assets/welcome.png");
-embed.setImage("attachment://welcome.png");
-await ch.send({ embeds:[embed], files:[file] });
-    
-    const embed = new EmbedBuilder()
-      .setTitle(`Welcome to ${member.guild.name}`)
-      .setDescription(
-        `Welcome : ${member}\nInvited By : ${inviterText}`
-      )
-      .setThumbnail(member.user.displayAvatarURL({ size: 256 }))
-      .setImage(welcomeImageUrl)
-      .setColor(0x00b0f4)
-      .setTimestamp();
+      const inviterText = "Unknown"; // لاحقاً نركب invite tracking
 
-    await ch.send({ embeds: [embed] });
+      const embed = new EmbedBuilder()
+        .setTitle(`Welcome to ${member.guild.name}`)
+        .setDescription(`Welcome : ${member}\nInvited By : ${inviterText}`)
+        .setThumbnail(member.user.displayAvatarURL({ size: 256 }))
+        .setColor(0x00b0f4)
+        .setTimestamp();
+
+      const welcomeImageUrl = process.env.WELCOME_IMAGE_URL;
+      if (welcomeImageUrl) embed.setImage(welcomeImageUrl);
+
+      await ch.send({ embeds: [embed] });
+    } catch (e) {
+      console.error("Welcome error:", e);
+    }
   });
 }
 
