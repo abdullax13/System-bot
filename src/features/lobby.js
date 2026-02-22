@@ -80,29 +80,44 @@ function setupLobby(client, store) {
   client.on("interactionCreate", async (i) => {
     try {
       // 1) اختيار لعبة من Panel
-      if (i.isStringSelectMenu() && i.customId === "lobby_game_select") {
-        await i.deferReply({ ephemeral: true });
+      if (i.isStringSelectMenu() && i.customId === "lobby_list_select") {
+  await i.deferReply({ ephemeral: true });
 
-        const game = i.values[0];
+  const picked = i.values[0]; // pick:CHANNELID
+  const channelId = picked.split(":")[1];
 
-        const embed = new EmbedBuilder()
-          .setTitle(`Lobby • ${game}`)
-          .setDescription("اختر:")
-          .setColor(0xff5500);
+  const data = store.get(`lobby:${channelId}`);
+  if (!data) return i.editReply("اللوبي غير موجود.");
 
-        const row = new ActionRowBuilder().addComponents(
-          new ButtonBuilder()
-            .setCustomId(`lobby_create:${game}`)
-            .setLabel("Create Lobby")
-            .setStyle(ButtonStyle.Success),
-          new ButtonBuilder()
-            .setCustomId(`lobby_find:${game}`)
-            .setLabel("Find Players")
-            .setStyle(ButtonStyle.Primary)
-        );
+  const countNow = data.members?.length ?? 0;
+  const full = countNow >= 5;
+  const locked = !!data.locked;
 
-        return i.editReply({ embeds: [embed], components: [row] });
-      }
+  if (locked || full) {
+    const reason = full ? "اللوبي ممتلئ 5/5" : "اللوبي مقفل";
+    return i.editReply(`🔴 ما تقدر تدخل: ${reason}`);
+  }
+
+  // إذا أصلاً عضو داخل
+  if (data.members?.includes(i.user.id)) {
+    return i.editReply(`أنت داخل بالفعل. <#${channelId}>`);
+  }
+
+  // أدخله: نضيف صلاحيات + نحدث store
+  const ch = await i.guild.channels.fetch(channelId).catch(() => null);
+  if (!ch) return i.editReply("الروم مو موجود.");
+
+  await ch.permissionOverwrites.edit(i.user.id, {
+    ViewChannel: true,
+    SendMessages: true,
+    ReadMessageHistory: true,
+  }).catch(() => null);
+
+  data.members = Array.from(new Set([...(data.members || []), i.user.id]));
+  store.set(`lobby:${channelId}`, data);
+
+  return i.editReply(`🟢 تم إدخالك اللوبي: ${ch}`);
+}
 
       // 2) زر Create Lobby => Modal
       if (i.isButton() && i.customId.startsWith("lobby_create:")) {
