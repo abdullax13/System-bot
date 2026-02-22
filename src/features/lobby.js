@@ -12,17 +12,28 @@ const {
   ChannelType,
 } = require("discord.js");
 
-async function ensureLobbyPanel(client, store) {
-  const guild = await client.guilds.fetch(process.env.GUILD_ID);
-  const channel = await guild.channels.fetch(process.env.LOBBY_CHANNEL_ID);
+function cfg(store, guildId, key) {
+  return store.get(`cfg:${guildId}:${key}`);
+}
+
+// ===== Panel إرسال/تحديث (يناديه /setup) =====
+async function sendLobbyPanel(client, store, guildId) {
+  const lobbyChannelId = cfg(store, guildId, "lobbyChannelId");
+  if (!lobbyChannelId) throw new Error("Lobby channel not configured. Run /setup type:lobby");
+
+  const guild = await client.guilds.fetch(guildId);
+  const channel = await guild.channels.fetch(lobbyChannelId);
 
   const embed = new EmbedBuilder()
     .setTitle(guild.name || "Rising Ashes")
     .setDescription("اختار لعبتك عشان تسوي Lobby أو تلقى لاعبين.")
     .setColor(0xff5500);
 
+  const banner = process.env.LOBBY_BANNER_URL;
+  if (banner) embed.setImage(banner);
+
   const menu = new StringSelectMenuBuilder()
-    .setCustomId("game_select")
+    .setCustomId("lobby_game_select")
     .setPlaceholder("اختر لعبة")
     .addOptions(
       { label: "MOBILE LEGENDS", value: "ML" },
@@ -31,26 +42,45 @@ async function ensureLobbyPanel(client, store) {
 
   const row = new ActionRowBuilder().addComponents(menu);
 
-  const key = `lobbyPanel:${guild.id}`;
+  const key = `panel:${guildId}:lobbyMessageId`;
   const existingId = store.get(key);
 
   if (existingId) {
     const msg = await channel.messages.fetch(existingId).catch(() => null);
     if (msg) {
       await msg.edit({ embeds: [embed], components: [row] });
-      return;
+      return msg;
     }
   }
 
   const msg = await channel.send({ embeds: [embed], components: [row] });
   store.set(key, msg.id);
+  return msg;
 }
 
+// ===== Helpers =====
+function lobbyKey(channelId) { return `lobby:${channelId}`; }
+
+function lobbyStatusEmoji(lobby) {
+  const count = lobby.members?.length ?? 0;
+  const full = count >= 5;
+  const locked = !!lobby.locked;
+  return (locked || full) ? "🔴" : "🟢";
+}
+
+function lobbyStatusText(lobby) {
+  const count = lobby.members?.length ?? 0;
+  if (count >= 5) return "ممتلئ";
+  if (lobby.locked) return "مقفل";
+  return "مفتوح";
+}
+
+// ===== Main Listener =====
 function setupLobby(client, store) {
   client.on("interactionCreate", async (i) => {
     try {
-      // 1) اختيار اللعبة
-      if (i.isStringSelectMenu() && i.customId === "game_select") {
+      // 1) اختيار لعبة من Panel
+      if (i.isStringSelectMenu() && i.customId === "lobby_game_select") {
         await i.deferReply({ ephemeral: true });
 
         const game = i.values[0];
@@ -74,7 +104,7 @@ function setupLobby(client, store) {
         return i.editReply({ embeds: [embed], components: [row] });
       }
 
-      // 2) فتح مودال Create Lobby
+      // 2) زر Create Lobby => Modal
       if (i.isButton() && i.customId.startsWith("lobby_create:")) {
         const game = i.customId.split(":")[1];
 
@@ -92,20 +122,23 @@ function setupLobby(client, store) {
         return i.showModal(modal);
       }
 
-      // 3) إنشاء روم اللوبي + إرسال أزرار التحكم
+      // 3) submit modal => إنشاء روم لوبي
       if (i.isModalSubmit() && i.customId.startsWith("lobby_modal:")) {
         await i.deferReply({ ephemeral: true });
+
+        const guildId = i.guildId;
+        const lobbyCategoryId = cfg(store, guildId, "lobbyCategoryId");
+        if (!lobbyCategoryId) return i.editReply("Lobby category غير محدد. استخدم /setup type:lobby مع category.");
 
         const game = i.customId.split(":")[1];
         const playerId = i.fields.getTextInputValue("player_id");
 
         const guild = i.guild;
-        const categoryId = process.env.LOBBY_CATEGORY_ID;
 
         const ch = await guild.channels.create({
           name: `${game.toLowerCase()}-${i.user.username}`.replace(/\s+/g, "-").slice(0, 90),
           type: ChannelType.GuildText,
-          parent: categoryId || null,
+          parent: lobbyCategoryId,
           permissionOverwrites: [
             { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
             {
@@ -119,7 +152,7 @@ function setupLobby(client, store) {
           ],
         });
 
-        store.set(`lobby:${ch.id}`, {
+        store.set(lobbyKey(ch.id), {
           game,
           ownerId: i.user.id,
           playerId,
@@ -131,7 +164,7 @@ function setupLobby(client, store) {
         const controls = new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId("lobby_lock").setLabel("Lock").setStyle(ButtonStyle.Secondary),
           new ButtonBuilder().setCustomId("lobby_unlock").setLabel("Unlock").setStyle(ButtonStyle.Success),
-          new ButtonBuilder().setCustomId("lobby_close").setLabel("Close").setStyle(ButtonStyle.Danger),
+          new ButtonBuilder().setCustomId("lobby_close").setLabel("Close").setStyle(ButtonStyle.Danger)
         );
 
         await ch.send({
@@ -142,7 +175,7 @@ function setupLobby(client, store) {
         return i.editReply({ content: `تم إنشاء اللوبي: ${ch}` });
       }
 
-      // 4) Find Players: Embed “بوكس” منظم
+      // 4) زر Find Players => نعرض “صفحة” Select Menu (مثل ticket sheet)
       if (i.isButton() && i.customId.startsWith("lobby_find:")) {
         await i.deferReply({ ephemeral: true });
 
@@ -153,54 +186,78 @@ function setupLobby(client, store) {
           .filter(x => x.key.startsWith("lobby:") && x.value?.game === game)
           .map(x => ({ channelId: x.key.split(":")[1], ...x.value }));
 
-        const embed = new EmbedBuilder()
-          .setTitle(`Find Players • ${game}`)
-          .setColor(0xff5500);
-
         if (!lobbies.length) {
-          embed.setDescription("ماكو لوبيات حالياً.");
-          return i.editReply({ embeds: [embed] });
+          return i.editReply({ content: `ماكو لوبيات حالياً لـ ${game}.` });
         }
 
-        // ترتيب وعرض
-        for (const l of lobbies) {
+        // خيارات (حد 25)
+        const options = lobbies.slice(0, 25).map(l => {
           const count = `${(l.members?.length ?? 0)}/5`;
-          const full = (l.members?.length ?? 0) >= 5;
-          const locked = !!l.locked;
+          const emoji = lobbyStatusEmoji(l);
+          const state = lobbyStatusText(l);
 
-          const status = (locked || full) ? "🔴" : "🟢";
-          const stateText = full ? "ممتلئ" : locked ? "مقفل" : "مفتوح";
+          return {
+            label: `#${l.channelId}`,
+            value: `pick:${l.channelId}`,
+            description: `${state} • ${count}`,
+            emoji: { name: emoji }
+          };
+        });
 
-          embed.addFields({
-            name: `${status} <#${l.channelId}>`,
-            value: `الحالة: **${stateText}**\nالعدد: **${count}**`,
-            inline: false
-          });
-        }
+        const menu = new StringSelectMenuBuilder()
+          .setCustomId("lobby_list_select")
+          .setPlaceholder("اختر لوبي")
+          .addOptions(options);
 
-        return i.editReply({ embeds: [embed] });
+        const row = new ActionRowBuilder().addComponents(menu);
+
+        return i.editReply({
+          content: `لوبيات ${game}:`,
+          components: [row],
+        });
       }
 
-      // 5) أزرار التحكم داخل روم اللوبي
+      // 5) اختيار لوبي من القائمة
+      if (i.isStringSelectMenu() && i.customId === "lobby_list_select") {
+        const picked = i.values[0]; // pick:CHANNELID
+        const channelId = picked.split(":")[1];
+
+        const data = store.get(lobbyKey(channelId));
+        if (!data) return i.reply({ content: "اللوبي غير موجود.", ephemeral: true });
+
+        const count = `${(data.members?.length ?? 0)}/5`;
+        const emoji = lobbyStatusEmoji(data);
+        const state = lobbyStatusText(data);
+
+        return i.reply({
+          content: `${emoji} <#${channelId}>\nالحالة: ${state}\nالعدد: ${count}`,
+          ephemeral: true
+        });
+      }
+
+      // 6) أزرار التحكم داخل روم اللوبي
       if (i.isButton() && ["lobby_lock", "lobby_unlock", "lobby_close"].includes(i.customId)) {
-        const data = store.get(`lobby:${i.channel.id}`);
-        if (!data) return i.reply({ content: "هذا الروم مو لوبي.", ephemeral: true });
-        if (data.ownerId !== i.user.id) return i.reply({ content: "بس صاحب اللوبي يقدر يتحكم.", ephemeral: true });
+        const data = store.get(lobbyKey(i.channelId));
+        if (!data) return i.reply({ content: "هذا مو روم لوبي.", ephemeral: true });
+
+        if (data.ownerId !== i.user.id) {
+          return i.reply({ content: "بس صاحب اللوبي يقدر يتحكم.", ephemeral: true });
+        }
 
         if (i.customId === "lobby_lock") {
           data.locked = true;
-          store.set(`lobby:${i.channel.id}`, data);
+          store.set(lobbyKey(i.channelId), data);
           return i.reply({ content: "تم قفل اللوبي 🔴", ephemeral: true });
         }
 
         if (i.customId === "lobby_unlock") {
           data.locked = false;
-          store.set(`lobby:${i.channel.id}`, data);
+          store.set(lobbyKey(i.channelId), data);
           return i.reply({ content: "تم فتح اللوبي 🟢", ephemeral: true });
         }
 
         if (i.customId === "lobby_close") {
-          store.del(`lobby:${i.channel.id}`);
+          store.del(lobbyKey(i.channelId));
           await i.reply({ content: "تم إغلاق اللوبي.", ephemeral: true }).catch(() => {});
           return i.channel.delete().catch(() => {});
         }
@@ -209,7 +266,6 @@ function setupLobby(client, store) {
     } catch (e) {
       console.error("Lobby error:", e);
       if (i.isRepliable()) {
-        // نحاول نرد بأي شكل عشان ما يظهر Interaction failed
         if (i.deferred) return i.editReply({ content: "صار خطأ." }).catch(() => {});
         return i.reply({ content: "صار خطأ.", ephemeral: true }).catch(() => {});
       }
@@ -217,4 +273,4 @@ function setupLobby(client, store) {
   });
 }
 
-module.exports = { setupLobby, ensureLobbyPanel };
+module.exports = { setupLobby, sendLobbyPanel };
