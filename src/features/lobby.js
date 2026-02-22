@@ -16,6 +16,24 @@ function cfg(store, guildId, key) {
   return store.get(`cfg:${guildId}:${key}`);
 }
 
+function lobbyKey(channelId) {
+  return `lobby:${channelId}`;
+}
+
+function lobbyIsFull(l) {
+  return (l.members?.length ?? 0) >= 5;
+}
+
+function lobbyEmoji(l) {
+  return (l.locked || lobbyIsFull(l)) ? "🔴" : "🟢";
+}
+
+function lobbyStateText(l) {
+  if (lobbyIsFull(l)) return "ممتلئ";
+  if (l.locked) return "مقفل";
+  return "مفتوح";
+}
+
 // ===== Panel إرسال/تحديث (يناديه /setup) =====
 async function sendLobbyPanel(client, store, guildId) {
   const lobbyChannelId = cfg(store, guildId, "lobbyChannelId");
@@ -25,7 +43,7 @@ async function sendLobbyPanel(client, store, guildId) {
   const channel = await guild.channels.fetch(lobbyChannelId);
 
   const embed = new EmbedBuilder()
-    .setTitle(guild.name || "Rising Ashes")
+    .setTitle(guild.name || "Lobby")
     .setDescription("اختار لعبتك عشان تسوي Lobby أو تلقى لاعبين.")
     .setColor(0xff5500);
 
@@ -58,68 +76,35 @@ async function sendLobbyPanel(client, store, guildId) {
   return msg;
 }
 
-// ===== Helpers =====
-function lobbyKey(channelId) { return `lobby:${channelId}`; }
-
-function lobbyStatusEmoji(lobby) {
-  const count = lobby.members?.length ?? 0;
-  const full = count >= 5;
-  const locked = !!lobby.locked;
-  return (locked || full) ? "🔴" : "🟢";
-}
-
-function lobbyStatusText(lobby) {
-  const count = lobby.members?.length ?? 0;
-  if (count >= 5) return "ممتلئ";
-  if (lobby.locked) return "مقفل";
-  return "مفتوح";
-}
-
-// ===== Main Listener =====
 function setupLobby(client, store) {
   client.on("interactionCreate", async (i) => {
     try {
-      // 1) اختيار لعبة من Panel
+      // ✅ دعم customId القديم إذا عندك Panels قديمة
       if (i.isStringSelectMenu() && (i.customId === "lobby_game_select" || i.customId === "game_select")) {
-  await i.deferReply({ ephemeral: true });
+        await i.deferReply({ ephemeral: true });
 
-  const picked = i.values[0]; // pick:CHANNELID
-  const channelId = picked.split(":")[1];
+        const game = i.values[0];
 
-  const data = store.get(`lobby:${channelId}`);
-  if (!data) return i.editReply("اللوبي غير موجود.");
+        const embed = new EmbedBuilder()
+          .setTitle(`Lobby • ${game}`)
+          .setDescription("اختر:")
+          .setColor(0xff5500);
 
-  const countNow = data.members?.length ?? 0;
-  const full = countNow >= 5;
-  const locked = !!data.locked;
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`lobby_create:${game}`)
+            .setLabel("Create Lobby")
+            .setStyle(ButtonStyle.Success),
+          new ButtonBuilder()
+            .setCustomId(`lobby_find:${game}`)
+            .setLabel("Find Players")
+            .setStyle(ButtonStyle.Primary)
+        );
 
-  if (locked || full) {
-    const reason = full ? "اللوبي ممتلئ 5/5" : "اللوبي مقفل";
-    return i.editReply(`🔴 ما تقدر تدخل: ${reason}`);
-  }
+        return i.editReply({ embeds: [embed], components: [row] });
+      }
 
-  // إذا أصلاً عضو داخل
-  if (data.members?.includes(i.user.id)) {
-    return i.editReply(`أنت داخل بالفعل. <#${channelId}>`);
-  }
-
-  // أدخله: نضيف صلاحيات + نحدث store
-  const ch = await i.guild.channels.fetch(channelId).catch(() => null);
-  if (!ch) return i.editReply("الروم مو موجود.");
-
-  await ch.permissionOverwrites.edit(i.user.id, {
-    ViewChannel: true,
-    SendMessages: true,
-    ReadMessageHistory: true,
-  }).catch(() => null);
-
-  data.members = Array.from(new Set([...(data.members || []), i.user.id]));
-  store.set(`lobby:${channelId}`, data);
-
-  return i.editReply(`🟢 تم إدخالك اللوبي: ${ch}`);
-}
-
-      // 2) زر Create Lobby => Modal
+      // Create Lobby -> Modal
       if (i.isButton() && i.customId.startsWith("lobby_create:")) {
         const game = i.customId.split(":")[1];
 
@@ -137,13 +122,13 @@ function setupLobby(client, store) {
         return i.showModal(modal);
       }
 
-      // 3) submit modal => إنشاء روم لوبي
+      // Submit -> إنشاء روم لوبي
       if (i.isModalSubmit() && i.customId.startsWith("lobby_modal:")) {
         await i.deferReply({ ephemeral: true });
 
         const guildId = i.guildId;
         const lobbyCategoryId = cfg(store, guildId, "lobbyCategoryId");
-        if (!lobbyCategoryId) return i.editReply("Lobby category غير محدد. استخدم /setup type:lobby مع category.");
+        if (!lobbyCategoryId) return i.editReply("لازم تسوي /setup type:lobby وتختار category.");
 
         const game = i.customId.split(":")[1];
         const playerId = i.fields.getTextInputValue("player_id");
@@ -162,6 +147,7 @@ function setupLobby(client, store) {
                 PermissionFlagsBits.ViewChannel,
                 PermissionFlagsBits.SendMessages,
                 PermissionFlagsBits.ReadMessageHistory,
+                PermissionFlagsBits.ManageChannels, // لصاحب اللوبي
               ],
             },
           ],
@@ -190,32 +176,44 @@ function setupLobby(client, store) {
         return i.editReply({ content: `تم إنشاء اللوبي: ${ch}` });
       }
 
-      // 4) زر Find Players => نعرض “صفحة” Select Menu (مثل ticket sheet)
+      // Find Players -> قائمة اللوبيات
       if (i.isButton() && i.customId.startsWith("lobby_find:")) {
         await i.deferReply({ ephemeral: true });
 
         const game = i.customId.split(":")[1];
-
         const all = store.all();
-        const lobbies = all
+
+        // كل اللوبيات المخزنة لهاللعبة
+        const raw = all
           .filter(x => x.key.startsWith("lobby:") && x.value?.game === game)
           .map(x => ({ channelId: x.key.split(":")[1], ...x.value }));
 
-        if (!lobbies.length) {
+        // فلترة + حذف القديم من store إذا القناة محذوفة
+        const valid = [];
+        for (const l of raw) {
+          const ch = await i.guild.channels.fetch(l.channelId).catch(() => null);
+          if (!ch) {
+            store.del(lobbyKey(l.channelId));
+            continue;
+          }
+          valid.push({ ...l, channelName: ch.name });
+        }
+
+        if (!valid.length) {
           return i.editReply({ content: `ماكو لوبيات حالياً لـ ${game}.` });
         }
 
         // خيارات (حد 25)
-        const options = lobbies.slice(0, 25).map(l => {
+        const options = valid.slice(0, 25).map(l => {
           const count = `${(l.members?.length ?? 0)}/5`;
-          const emoji = lobbyStatusEmoji(l);
-          const state = lobbyStatusText(l);
+          const emoji = lobbyEmoji(l);
+          const state = lobbyStateText(l);
 
           return {
-            label: `#${l.channelId}`,
+            label: `#${l.channelName}`,
             value: `pick:${l.channelId}`,
             description: `${state} • ${count}`,
-            emoji: { name: emoji }
+            emoji: { name: emoji },
           };
         });
 
@@ -226,31 +224,46 @@ function setupLobby(client, store) {
 
         const row = new ActionRowBuilder().addComponents(menu);
 
-        return i.editReply({
-          content: `لوبيات ${game}:`,
-          components: [row],
-        });
+        return i.editReply({ content: `لوبيات ${game}:`, components: [row] });
       }
 
-      // 5) اختيار لوبي من القائمة
-      if (i.isStringSelectMenu() && i.customId === "lobby_list_select") {
-        const picked = i.values[0]; // pick:CHANNELID
-        const channelId = picked.split(":")[1];
+      // اختيار لوبي -> دخول تلقائي إذا مفتوح
+      if (i.isStringSelectMenu() && (i.customId === "lobby_list_select" || i.customId === "lobby_list")) {
+        await i.deferReply({ ephemeral: true });
+
+        const channelId = i.values[0].split(":")[1];
 
         const data = store.get(lobbyKey(channelId));
-        if (!data) return i.reply({ content: "اللوبي غير موجود.", ephemeral: true });
+        if (!data) return i.editReply("اللوبي غير موجود.");
 
-        const count = `${(data.members?.length ?? 0)}/5`;
-        const emoji = lobbyStatusEmoji(data);
-        const state = lobbyStatusText(data);
+        const ch = await i.guild.channels.fetch(channelId).catch(() => null);
+        if (!ch) {
+          store.del(lobbyKey(channelId));
+          return i.editReply("اللوبي غير موجود.");
+        }
 
-        return i.reply({
-          content: `${emoji} <#${channelId}>\nالحالة: ${state}\nالعدد: ${count}`,
-          ephemeral: true
-        });
+        if (data.locked) return i.editReply("🔴 اللوبي مقفل، ما تقدر تدخل.");
+        if (lobbyIsFull(data)) return i.editReply("🔴 اللوبي ممتلئ 5/5.");
+
+        if (data.members?.includes(i.user.id)) {
+          return i.editReply(`أنت داخل بالفعل: ${ch}`);
+        }
+
+        // أدخله (صلاحيات)
+        await ch.permissionOverwrites.edit(i.user.id, {
+          ViewChannel: true,
+          SendMessages: true,
+          ReadMessageHistory: true,
+        }).catch(() => null);
+
+        data.members = Array.from(new Set([...(data.members || []), i.user.id]));
+        store.set(lobbyKey(channelId), data);
+
+        await ch.send(`🟢 <@${i.user.id}> دخل اللوبي. (${data.members.length}/5)`).catch(() => {});
+        return i.editReply(`🟢 تم إدخالك اللوبي: ${ch}`);
       }
 
-      // 6) أزرار التحكم داخل روم اللوبي
+      // أزرار التحكم داخل روم اللوبي
       if (i.isButton() && ["lobby_lock", "lobby_unlock", "lobby_close"].includes(i.customId)) {
         const data = store.get(lobbyKey(i.channelId));
         if (!data) return i.reply({ content: "هذا مو روم لوبي.", ephemeral: true });
