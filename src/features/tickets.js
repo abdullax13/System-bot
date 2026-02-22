@@ -2,100 +2,80 @@
 const {
   EmbedBuilder,
   ActionRowBuilder,
-  StringSelectMenuBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
   PermissionFlagsBits,
   ChannelType,
 } = require("discord.js");
 
-async function ensureTicketsPanel(client, store) {
-  const guild = await client.guilds.fetch(process.env.GUILD_ID);
-  const channel = await guild.channels.fetch(process.env.TICKETS_CHANNEL_ID);
-
-  const embed = new EmbedBuilder()
-    .setTitle("Tickets")
-    .setDescription("اختر نوع التذكرة: اقتراح أو شكوى")
-    .setColor(0xff5500);
-
-  const menu = new StringSelectMenuBuilder()
-    .setCustomId("ticket_select")
-    .setPlaceholder("اختر نوع التذكرة")
-    .addOptions(
-      { label: "اقتراح", value: "suggestion" },
-      { label: "شكوى", value: "complaint" }
-    );
-
-  const row = new ActionRowBuilder().addComponents(menu);
-
-  const key = `ticketsPanelMessageId:${guild.id}`;
-  const existingId = store.get(key);
-
-  if (existingId) {
-    const msg = await channel.messages.fetch(existingId).catch(() => null);
-    if (msg) {
-      await msg.edit({ embeds: [embed], components: [row] });
-      return;
-    }
-  }
-
-  const msg = await channel.send({ embeds: [embed], components: [row] });
-  store.set(key, msg.id);
-}
-
 function setupTickets(client, store) {
+
   client.on("interactionCreate", async (i) => {
-    try {
-      if (!i.isStringSelectMenu()) return;
-      if (i.customId !== "ticket_select") return;
 
-      const kind = i.values[0]; // suggestion | complaint
-      const guild = i.guild;
-      const categoryId = process.env.TICKETS_CATEGORY_ID;
+    if (i.isButton() && i.customId === "ticket_create") {
 
-      const existing = store.all().find(x =>
-        x.key.startsWith("ticket:") && x.value?.ownerId === i.user.id && x.value?.status === "open"
-      );
-      if (existing) {
-        return i.reply({ content: "عندك تذكرة مفتوحة بالفعل.", ephemeral: true });
-      }
+      const modal = new ModalBuilder()
+        .setCustomId("ticket_modal")
+        .setTitle("اكتب مشكلتك");
 
-      const ch = await guild.channels.create({
-        name: `ticket-${i.user.username}`.slice(0, 90),
+      const input = new TextInputBuilder()
+        .setCustomId("problem")
+        .setLabel("اكتب مشكلتك كاملة")
+        .setStyle(TextInputStyle.Paragraph)
+        .setRequired(true);
+
+      modal.addComponents(new ActionRowBuilder().addComponents(input));
+      return i.showModal(modal);
+    }
+
+    if (i.isModalSubmit() && i.customId === "ticket_modal") {
+
+      const text = i.fields.getTextInputValue("problem");
+
+      const ch = await i.guild.channels.create({
+        name: `ticket-${i.user.username}`,
         type: ChannelType.GuildText,
-        parent: categoryId || null,
+        parent: process.env.TICKETS_CATEGORY_ID,
         permissionOverwrites: [
-          { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
-          {
-            id: i.user.id,
-            allow: [
-              PermissionFlagsBits.ViewChannel,
-              PermissionFlagsBits.SendMessages,
-              PermissionFlagsBits.ReadMessageHistory,
-            ],
-          },
+          { id: i.guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+          { id: i.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages] },
         ],
       });
 
-      store.set(`ticket:${ch.id}`, {
-        ownerId: i.user.id,
-        kind,
-        status: "open",
-        createdAt: Date.now(),
-      });
-
       const embed = new EmbedBuilder()
-        .setTitle(`Ticket • ${kind === "suggestion" ? "اقتراح" : "شكوى"}`)
-        .setDescription(`صاحب التذكرة: <@${i.user.id}>\nاكتب التفاصيل هنا.`)
+        .setTitle("New Ticket")
+        .setDescription(text)
+        .addFields({ name: "Owner", value: `${i.user}` })
         .setColor(0xff5500);
 
-      await ch.send({ embeds: [embed] });
-      await i.reply({ content: `تم فتح تذكرة: ${ch}`, ephemeral: true });
-    } catch (e) {
-      console.error("Tickets error:", e);
-      if (i.isRepliable()) {
-        await i.reply({ content: "صار خطأ بالتذاكر.", ephemeral: true }).catch(() => {});
-      }
+      const controls = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId("ticket_claim").setLabel("Claim").setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId("ticket_close").setLabel("Close").setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId("ticket_delete").setLabel("Delete").setStyle(ButtonStyle.Danger),
+      );
+
+      await ch.send({ embeds: [embed], components: [controls] });
+
+      return i.reply({ content: `تم فتح التذكرة ${ch}`, ephemeral: true });
     }
+
+    if (i.isButton() && i.customId === "ticket_claim") {
+      return i.reply({ content: `${i.user} استلم التذكرة`, ephemeral: false });
+    }
+
+    if (i.isButton() && i.customId === "ticket_close") {
+      return i.channel.send("تم إغلاق التذكرة.");
+    }
+
+    if (i.isButton() && i.customId === "ticket_delete") {
+      await i.channel.delete();
+    }
+
   });
+
 }
 
-module.exports = { setupTickets, ensureTicketsPanel };
+module.exports = { setupTickets };
