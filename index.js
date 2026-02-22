@@ -6,7 +6,6 @@ const { createStore } = require("./src/store");
 const { setupWelcome } = require("./src/features/welcome");
 const { setupLobby } = require("./src/features/lobby");
 const { setupTickets } = require("./src/features/tickets");
-const { setupRules } = require("./src/features/rulesEmbed");
 const { setupSetupCommand } = require("./src/features/setup");
 
 const client = new Client({
@@ -26,7 +25,6 @@ const store = createStore("data.json");
 setupWelcome(client, store);
 setupLobby(client, store);
 setupTickets(client, store);
-setupRules(client, store);
 setupSetupCommand(client, store);
 
 client.once("ready", async () => {
