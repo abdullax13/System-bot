@@ -11,8 +11,10 @@ function setupWelcome(client, store) {
     const inviterText = "Unknown";
 
     // خيار 1: رابط صورة (CDN)
-    const welcomeImageUrl = process.env.WELCOME_IMAGE_URL; // حط رابط الصورة هنا
-
+    const file = new AttachmentBuilder("assets/welcome.png");
+embed.setImage("attachment://welcome.png");
+await ch.send({ embeds:[embed], files:[file] });
+    
     const embed = new EmbedBuilder()
       .setTitle(`Welcome to ${member.guild.name}`)
       .setDescription(
