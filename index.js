@@ -4,10 +4,10 @@ const { Client, GatewayIntentBits, Partials } = require("discord.js");
 const { createStore } = require("./src/store");
 
 const { setupWelcome } = require("./src/features/welcome");
-const { ensureRulesEmbed } = require("./src/features/rulesEmbed");
-
-const { setupLobby, ensureLobbyPanel } = require("./src/features/lobby");
-const { setupTickets, ensureTicketsPanel } = require("./src/features/tickets");
+const { setupLobby } = require("./src/features/lobby");
+const { setupTickets } = require("./src/features/tickets");
+const { setupRules } = require("./src/features/rulesEmbed");
+const { setupSetupCommand } = require("./src/features/setup");
 
 const client = new Client({
   intents: [
@@ -22,18 +22,15 @@ const client = new Client({
 
 const store = createStore("data.json");
 
-// listeners لازم يكونون برا ready
+// listeners
 setupWelcome(client, store);
 setupLobby(client, store);
 setupTickets(client, store);
+setupRules(client, store);
+setupSetupCommand(client, store);
 
 client.once("ready", async () => {
   console.log(`Logged in as ${client.user.tag}`);
-
-  // ثابتات: تعدّل الرسالة إذا موجودة بدل ما ترسل كل مرة
-  try { await ensureRulesEmbed(client, store); } catch (e) { console.error("Rules error:", e); }
-  try { await ensureLobbyPanel(client, store); } catch (e) { console.error("Lobby panel error:", e); }
-  try { await ensureTicketsPanel(client, store); } catch (e) { console.error("Tickets panel error:", e); }
 });
 
 client.login(process.env.BOT_TOKEN);
