@@ -80,7 +80,7 @@ function setupLobby(client, store) {
   client.on("interactionCreate", async (i) => {
     try {
       // 1) اختيار لعبة من Panel
-      if (i.isStringSelectMenu() && i.customId === "lobby_list_select") {
+      if (i.isStringSelectMenu() && (i.customId === "lobby_game_select" || i.customId === "game_select")) {
   await i.deferReply({ ephemeral: true });
 
   const picked = i.values[0]; // pick:CHANNELID
