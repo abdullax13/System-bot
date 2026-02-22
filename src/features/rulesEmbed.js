@@ -6,26 +6,25 @@ async function ensureRulesEmbed(client, store) {
   const channel = await guild.channels.fetch(process.env.RULES_CHANNEL_ID);
 
   const serverIcon = guild.iconURL({ size: 256 });
-  const bannerUrl = process.env.RULES_BANNER_URL; // رابط البنر الكبير
+  const bannerUrl = process.env.RULES_BANNER_URL;
 
   const embed = new EmbedBuilder()
-    .setAuthor({ name: guild.name, iconURL: serverIcon })
+    .setAuthor({ name: guild.name, iconURL: serverIcon ?? undefined })
     .setTitle("Rules")
-    .setThumbnail(serverIcon)
-    .setImage(bannerUrl)
+    .setThumbnail(serverIcon ?? undefined)
     .setDescription("حط قوانينك هنا…")
     .setColor(0xff5500);
+
+  if (bannerUrl) embed.setImage(bannerUrl);
 
   const key = `rulesMessageId:${guild.id}`;
   const existingId = store.get(key);
 
   if (existingId) {
-    try {
-      const msg = await channel.messages.fetch(existingId);
+    const msg = await channel.messages.fetch(existingId).catch(() => null);
+    if (msg) {
       await msg.edit({ embeds: [embed] });
       return;
-    } catch (e) {
-      // لو انحذف، نعيد الإرسال
     }
   }
 
