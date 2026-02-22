@@ -3,59 +3,84 @@ const {
   REST,
   Routes,
   SlashCommandBuilder,
-  PermissionFlagsBits,
   ChannelType,
+  PermissionFlagsBits,
 } = require("discord.js");
 
-async function registerSetupCommand() {
+const { sendTicketsPanel } = require("./tickets");
+const { sendLobbyPanel } = require("./lobby");
+
+// إذا عندك rulesEmbed.js ويصدّر sendRulesPanel خلّه
+let sendRulesPanel = null;
+try {
+  ({ sendRulesPanel } = require("./rulesEmbed"));
+} catch (_) {
+  sendRulesPanel = null;
+}
+
+const { registerModCommands } = require("./mod");
+
+function setCfg(store, guildId, key, value) {
+  store.set(`cfg:${guildId}:${key}`, value);
+}
+
+async function registerAllCommands() {
   const token = process.env.BOT_TOKEN;
   const clientId = process.env.CLIENT_ID;
   const guildId = process.env.GUILD_ID;
 
   if (!token || !clientId || !guildId) {
-    throw new Error("Missing BOT_TOKEN / CLIENT_ID / GUILD_ID");
+    throw new Error("Missing BOT_TOKEN / CLIENT_ID / GUILD_ID in environment variables.");
   }
 
-  const cmd = new SlashCommandBuilder()
+  const setupCmd = new SlashCommandBuilder()
     .setName("setup")
     .setDescription("تحديد الرومات وإرسال Panels")
-    .addStringOption(o =>
-      o.setName("type")
-        .setDescription("نوع النظام")
+    .addStringOption((o) =>
+      o
+        .setName("type")
+        .setDescription("نوع الإعداد")
         .setRequired(true)
         .addChoices(
           { name: "welcome", value: "welcome" },
-          { name: "rules", value: "rules" },
-          { name: "lobby", value: "lobby" },
           { name: "ticket", value: "ticket" },
+          { name: "lobby", value: "lobby" },
+          { name: "rules", value: "rules" }
         )
     )
-    .addChannelOption(o =>
-      o.setName("channel")
-        .setDescription("الروم اللي ينرسل فيه الـ Panel")
+    .addChannelOption((o) =>
+      o
+        .setName("channel")
+        .setDescription("الروم المستهدف")
         .setRequired(true)
         .addChannelTypes(ChannelType.GuildText)
     )
-    .addChannelOption(o =>
-      o.setName("category")
-        .setDescription("كاتيجوري (مطلوب للـ lobby/ticket)")
+    .addChannelOption((o) =>
+      o
+        .setName("category")
+        .setDescription("Category (مطلوبة للـ ticket و lobby)")
         .setRequired(false)
         .addChannelTypes(ChannelType.GuildCategory)
     )
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator);
 
+  // أوامر الإدارة (clear/lock/unlock/move)
+  const modCmds = await registerModCommands();
+
   const rest = new REST({ version: "10" }).setToken(token);
-  await rest.put(Routes.applicationGuildCommands(clientId, guildId), { body: [cmd.toJSON()] });
+
+  // ✅ تسجيل كل الأوامر مع بعض (بدون overwrite لاحق)
+  await rest.put(Routes.applicationGuildCommands(clientId, guildId), {
+    body: [setupCmd.toJSON(), ...modCmds],
+  });
+
+  console.log("Slash commands registered (setup + mod).");
 }
 
 function setupSetupCommand(client, store) {
-  client.once("ready", async () => {
-    try {
-      await registerSetupCommand();
-      console.log("Setup command registered.");
-    } catch (e) {
-      console.error("Failed to register setup command:", e);
-    }
+  // سجّل الأوامر عند التشغيل
+  registerAllCommands().catch((e) => {
+    console.error("Command registration error:", e);
   });
 
   client.on("interactionCreate", async (i) => {
@@ -63,49 +88,59 @@ function setupSetupCommand(client, store) {
       if (!i.isChatInputCommand()) return;
       if (i.commandName !== "setup") return;
 
-      await i.deferReply({ ephemeral: true });
+      // صلاحية
+      if (!i.memberPermissions.has(PermissionFlagsBits.Administrator)) {
+        return i.reply({ content: "لازم Administrator.", ephemeral: true });
+      }
 
       const type = i.options.getString("type", true);
       const channel = i.options.getChannel("channel", true);
       const category = i.options.getChannel("category", false);
 
-      // خزّن الإعدادات
+      await i.deferReply({ ephemeral: true });
+
+      const guildId = i.guildId;
+
       if (type === "welcome") {
-        store.set(`cfg:${i.guildId}:welcomeChannelId`, channel.id);
+        setCfg(store, guildId, "welcomeChannelId", channel.id);
         return i.editReply(`تم تعيين روم الترحيب: ${channel}`);
-      }
-
-      if (type === "rules") {
-        store.set(`cfg:${i.guildId}:rulesChannelId`, channel.id);
-        // نطلب من rulesEmbed.js يسوي إرسال
-        const { sendRulesPanel } = require("./rulesEmbed");
-        await sendRulesPanel(client, store, i.guildId);
-        return i.editReply(`تم إرسال rules في ${channel}`);
-      }
-
-      if (type === "lobby") {
-        if (!category) return i.editReply("لازم تختار category للـ lobby.");
-        store.set(`cfg:${i.guildId}:lobbyChannelId`, channel.id);
-        store.set(`cfg:${i.guildId}:lobbyCategoryId`, category.id);
-
-        const { sendLobbyPanel } = require("./lobby");
-        await sendLobbyPanel(client, store, i.guildId);
-        return i.editReply(`تم إرسال lobby panel في ${channel} و تعيين كاتيجوري ${category}`);
       }
 
       if (type === "ticket") {
         if (!category) return i.editReply("لازم تختار category للـ ticket.");
-        store.set(`cfg:${i.guildId}:ticketsChannelId`, channel.id);
-        store.set(`cfg:${i.guildId}:ticketsCategoryId`, category.id);
+        setCfg(store, guildId, "ticketsChannelId", channel.id);
+        setCfg(store, guildId, "ticketsCategoryId", category.id);
 
-        const { sendTicketsPanel } = require("./tickets");
-        await sendTicketsPanel(client, store, i.guildId);
-        return i.editReply(`تم إرسال tickets panel في ${channel} و تعيين كاتيجوري ${category}`);
+        // إرسال/تحديث Panel
+        await sendTicketsPanel(client, store, guildId);
+
+        return i.editReply(`تم تعيين روم التيكت: ${channel} وتعيين كاتيجوري: ${category} وإرسال Panel.`);
       }
 
+      if (type === "lobby") {
+        if (!category) return i.editReply("لازم تختار category للـ lobby.");
+        setCfg(store, guildId, "lobbyChannelId", channel.id);
+        setCfg(store, guildId, "lobbyCategoryId", category.id);
+
+        // إرسال/تحديث Panel
+        await sendLobbyPanel(client, store, guildId);
+
+        return i.editReply(`تم إرسال lobby panel في ${channel} وتعيين كاتيجوري: ${category}`);
+      }
+
+      if (type === "rules") {
+        setCfg(store, guildId, "rulesChannelId", channel.id);
+
+        if (sendRulesPanel) {
+          await sendRulesPanel(client, store, guildId);
+          return i.editReply(`تم تعيين روم القوانين: ${channel} وإرسال Panel.`);
+        }
+
+        return i.editReply(`تم تعيين روم القوانين: ${channel} (ملف rulesEmbed.js غير موجود لإرسال Panel).`);
+      }
     } catch (e) {
       console.error("Setup command error:", e);
-      if (i.deferred) return i.editReply("صار خطأ.");
+      if (i.deferred) return i.editReply("صار خطأ.").catch(() => {});
       return i.reply({ content: "صار خطأ.", ephemeral: true }).catch(() => {});
     }
   });
