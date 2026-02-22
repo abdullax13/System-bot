@@ -11,7 +11,7 @@ function setupWelcome(client, store) {
     const inviterText = "Unknown";
 
     // خيار 1: رابط صورة (CDN)
-    const welcomeImageUrl = process.env.https://cdn.discordapp.com/attachments/1475184112556966040/1475191306576724081/EFBB5ABD-0077-4291-8284-5179EC2F7B1E.png?ex=699c9677&is=699b44f7&hm=4d7947944e3dc2232a2d712faceac8097b156c3345d7f812ad961428e4415c4a&; // حط رابط الصورة هنا
+    const welcomeImageUrl = process.env.WELCOME_IMAGE_URL; // حط رابط الصورة هنا
 
     const embed = new EmbedBuilder()
       .setTitle(`Welcome to ${member.guild.name}`)
